@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>車輛隱藏功能開通紀錄</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; background: #f4f4f4;}
+        table { width: 100%; background: white; border-collapse: collapse; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        th, td { padding: 12px; border: 1px solid #ddd; text-align: left; }
+        th { background: #343a40; color: white; }
+        .status-success { color: #28a745; font-weight: bold; }
+        .status-fail { color: #dc3545; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h2>🛠️ 車輛隱藏功能開通/檢修紀錄</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>時間</th>
+                <th>車身碼 (VIN)</th>
+                <th>開通功能</th>
+                <th>執行結果</th>
+            </tr>
+        </thead>
+        <tbody id="logTableBody">
+            <!-- 資料動態載入區 -->
+        </tbody>
+    </table>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getDatabase, ref, onValue } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+
+        // TODO: 請替換為您的 Firebase 網址
+        const firebaseConfig = {
+            databaseURL: "https://vin-logger-default-rtdb.asia-southeast1.firebasedatabase.app/" 
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
+
+        // 監聽 "Function_Logs" 資料夾
+        const recordsRef = ref(db, 'Function_Logs');
+        onValue(recordsRef, (snapshot) => {
+            const data = snapshot.val();
+            const tableBody = document.getElementById('logTableBody');
+            tableBody.innerHTML = ''; 
+            
+            if(data) {
+                Object.values(data).reverse().forEach(record => {
+                    // 根據狀態決定 CSS class (顏色)
+                    const statusClass = (record.status === "成功" || record.status_code === 1) ? "status-success" : "status-fail";
+                    const statusText = (record.status === "成功" || record.status_code === 1) ? "✅ 成功" : "❌ 失敗";
+
+                    const row = `<tr>
+                        <td>${record.timestamp}</td>
+                        <td><strong>${record.vin}</strong></td>
+                        <td>${record.function_name}</td>
+                        <td class="${statusClass}">${statusText} (代碼: ${record.status_code})</td>
+                    </tr>`;
+                    tableBody.innerHTML += row;
+                });
+            }
+        });
+    </script>
+</body>
+</html>
