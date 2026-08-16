@@ -6,10 +6,13 @@
     <style>
         body { font-family: Arial, sans-serif; padding: 20px; background: #f4f4f4;}
         table { width: 100%; background: white; border-collapse: collapse; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-        th, td { padding: 12px; border: 1px solid #ddd; text-align: left; }
+        th, td { padding: 12px; border: 1px solid #ddd; text-align: left; vertical-align: middle; }
         th { background: #343a40; color: white; }
         .status-success { color: #28a745; font-weight: bold; }
         .status-fail { color: #dc3545; font-weight: bold; }
+        /* 狀態碼高亮樣式 */
+        .code-normal { color: #6c757d; font-size: 0.9em; }
+        .code-error { background: #dc3545; color: white; padding: 3px 8px; border-radius: 4px; font-weight: bold; font-family: monospace;}
     </style>
 </head>
 <body>
@@ -21,6 +24,7 @@
                 <th>車身碼 (VIN)</th>
                 <th>開通功能</th>
                 <th>執行結果</th>
+                <th>狀態碼 (Debug)</th> <!-- 新增專屬欄位 -->
             </tr>
         </thead>
         <tbody id="logTableBody">
@@ -50,14 +54,23 @@
             if(data) {
                 Object.values(data).reverse().forEach(record => {
                     // 根據狀態決定 CSS class (顏色)
-                    const statusClass = (record.status === "成功" || record.status_code === 1) ? "status-success" : "status-fail";
-                    const statusText = (record.status === "成功" || record.status_code === 1) ? "✅ 成功" : "❌ 失敗";
+                    const isSuccess = (record.status === "成功" || record.status_code === 1);
+                    const statusClass = isSuccess ? "status-success" : "status-fail";
+                    const statusText = isSuccess ? "✅ 成功" : "❌ 失敗";
+
+                    // 針對狀態碼進行 Debug UI 處理
+                    const codeVal = record.status_code !== undefined ? record.status_code : "N/A";
+                    // 如果不是 1 (成功)，就套用 error badge 樣式以利 Debug
+                    const codeHtml = isSuccess 
+                        ? `<span class="code-normal">${codeVal}</span>` 
+                        : `<span class="code-error" title="發生錯誤，代碼：${codeVal}">${codeVal}</span>`;
 
                     const row = `<tr>
                         <td>${record.timestamp}</td>
                         <td><strong>${record.vin}</strong></td>
                         <td>${record.function_name}</td>
-                        <td class="${statusClass}">${statusText} (代碼: ${record.status_code})</td>
+                        <td class="${statusClass}">${statusText}</td>
+                        <td>${codeHtml}</td> <!-- 獨立顯示狀態碼 -->
                     </tr>`;
                     tableBody.innerHTML += row;
                 });
