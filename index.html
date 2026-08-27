@@ -13,10 +13,45 @@
         /* 狀態碼高亮樣式 */
         .code-normal { color: #6c757d; font-size: 0.9em; }
         .code-error { background: #dc3545; color: white; padding: 3px 8px; border-radius: 4px; font-weight: bold; font-family: monospace;}
+        
+        /* 新增：控制面板與開關的樣式 */
+        .control-panel {
+            background: white;
+            padding: 15px 20px;
+            margin-bottom: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        .control-panel span.label-text { font-weight: bold; font-size: 1.1em; }
+        
+        /* Toggle Switch CSS */
+        .switch { position: relative; display: inline-block; width: 50px; height: 26px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 26px; }
+        .slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 4px; bottom: 4px; background-color: white; transition: .4s; border-radius: 50%; }
+        input:checked + .slider { background-color: #28a745; }
+        input:checked + .slider:before { transform: translateX(24px); }
+        input:disabled + .slider { opacity: 0.5; cursor: not-allowed; }
+        
+        #statusText { font-weight: bold; margin-left: 5px; }
     </style>
 </head>
 <body>
     <h2>🛠️ 車輛隱藏功能開通/檢修紀錄</h2>
+    
+    <!-- 新增：連線權限控制面板 -->
+    <div class="control-panel">
+        <span class="label-text">App 連線權限控制：</span>
+        <label class="switch">
+            <input type="checkbox" id="appConnectToggle" disabled>
+            <span class="slider"></span>
+        </label>
+        <span id="statusText" style="color: #6c757d;">連線中...</span>
+    </div>
+
     <table>
         <thead>
             <tr>
@@ -24,7 +59,7 @@
                 <th>車身碼 (VIN)</th>
                 <th>開通功能</th>
                 <th>執行結果</th>
-                <th>狀態碼 (Debug)</th> <!-- 新增專屬欄位 -->
+                <th>狀態碼 (Debug)</th>
             </tr>
         </thead>
         <tbody id="logTableBody">
@@ -34,9 +69,9 @@
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-        import { getDatabase, ref, onValue } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+        // 新增引入 set 模組以供寫入使用
+        import { getDatabase, ref, onValue, set } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 
-        // TODO: 請替換為您的 Firebase 網址
         const firebaseConfig = {
             databaseURL: "https://vin-logger-default-rtdb.asia-southeast1.firebasedatabase.app/" 
         };
@@ -44,7 +79,45 @@
         const app = initializeApp(firebaseConfig);
         const db = getDatabase(app);
 
-        // 監聽 "Function_Logs" 資料夾
+        // ==========================================
+        // 1. App 連線開關控制邏輯 (app_control/is_connect_enabled)
+        // ==========================================
+        const toggleRef = ref(db, 'app_control/is_connect_enabled');
+        const toggleBtn = document.getElementById('appConnectToggle');
+        const statusText = document.getElementById('statusText');
+
+        // 監聽 Firebase 狀態 (網頁載入或被其他設備修改時觸發)
+        onValue(toggleRef, (snapshot) => {
+            const isEnabled = snapshot.val() || false; // 若無資料預設為 false
+            toggleBtn.checked = isEnabled;
+            toggleBtn.disabled = false; // 讀取完畢，解除鎖定
+            statusText.innerText = isEnabled ? "✅ 已允許連線" : "❌ 已禁止連線";
+            statusText.style.color = isEnabled ? "#28a745" : "#dc3545";
+        });
+
+        // 當網頁上的開關被切換時，寫入 Firebase
+        toggleBtn.addEventListener('change', (e) => {
+            const newState = e.target.checked;
+            statusText.innerText = "⏳ 更新中...";
+            statusText.style.color = "#f39c12";
+            toggleBtn.disabled = true; // 暫時鎖定防止連點
+            
+            set(toggleRef, newState)
+                .then(() => {
+                    toggleBtn.disabled = false; // 寫入成功，解除鎖定
+                })
+                .catch((error) => {
+                    console.error("狀態更新失敗", error);
+                    alert("狀態更新失敗，請檢查資料庫寫入權限！");
+                    toggleBtn.checked = !newState; // 失敗時退回原狀態
+                    toggleBtn.disabled = false;
+                });
+        });
+
+
+        // ==========================================
+        // 2. 原本的 Log 紀錄讀取邏輯 (Function_Logs)
+        // ==========================================
         const recordsRef = ref(db, 'Function_Logs');
         onValue(recordsRef, (snapshot) => {
             const data = snapshot.val();
@@ -53,14 +126,11 @@
             
             if(data) {
                 Object.values(data).reverse().forEach(record => {
-                    // 根據狀態決定 CSS class (顏色)
                     const isSuccess = (record.status === "成功" || record.status_code === 1);
                     const statusClass = isSuccess ? "status-success" : "status-fail";
                     const statusText = isSuccess ? "✅ 成功" : "❌ 失敗";
 
-                    // 針對狀態碼進行 Debug UI 處理
                     const codeVal = record.status_code !== undefined ? record.status_code : "N/A";
-                    // 如果不是 1 (成功)，就套用 error badge 樣式以利 Debug
                     const codeHtml = isSuccess 
                         ? `<span class="code-normal">${codeVal}</span>` 
                         : `<span class="code-error" title="發生錯誤，代碼：${codeVal}">${codeVal}</span>`;
@@ -70,7 +140,7 @@
                         <td><strong>${record.vin}</strong></td>
                         <td>${record.function_name}</td>
                         <td class="${statusClass}">${statusText}</td>
-                        <td>${codeHtml}</td> <!-- 獨立顯示狀態碼 -->
+                        <td>${codeHtml}</td>
                     </tr>`;
                     tableBody.innerHTML += row;
                 });
