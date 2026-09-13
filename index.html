@@ -91,7 +91,10 @@
             </tbody>
         </table>
 
-        <h2>執行紀錄</h2>
+        <div class="row-flex" style="justify-content: space-between; margin-top: 20px;">
+            <h2 style="margin:0">執行紀錄</h2>
+            <button id="exportCsvBtn">⬇️ 匯出 CSV</button>
+        </div>
         <table>
             <thead>
                 <tr>
@@ -101,6 +104,7 @@
                     <th>功能</th>
                     <th>結果</th>
                     <th>狀態碼</th>
+                    <th></th>
                 </tr>
             </thead>
             <tbody id="logTableBody"></tbody>
@@ -113,7 +117,7 @@
             getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged,
         } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
         import {
-            getDatabase, ref, onValue, set,
+            getDatabase, ref, onValue, set, remove,
         } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 
         const firebaseConfig = {
@@ -233,11 +237,24 @@
         // ==========================================
         // 執行紀錄
         // ==========================================
+        // 保留一份帶 key 的原始資料，刪除／匯出 CSV 都要用到。
+        let currentLogs = []; // [{ key, ...record }]，新到舊排序（跟畫面顯示順序一致）
+
+        function escHtml(s) {
+            return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+            }[c]));
+        }
+
         function renderLogs(data) {
+            currentLogs = Object.entries(data)
+                .map(([key, record]) => ({ key, ...record }))
+                .reverse(); // 新到舊
+
             const tableBody = document.getElementById('logTableBody');
             tableBody.innerHTML = '';
 
-            Object.values(data).reverse().forEach((record) => {
+            currentLogs.forEach((record) => {
                 const isSuccess = (record.status === "成功" || record.status_code === 1 || record.status_code === 6);
                 const statusClass = isSuccess ? "status-success" : "status-fail";
                 const statusLabel = isSuccess ? "✅ 成功" : "❌ 失敗";
@@ -248,16 +265,73 @@
                     : `<span class="code-error" title="發生錯誤，代碼：${codeVal}">${codeVal}</span>`;
 
                 const row = `<tr>
-                    <td>${record.timestamp ?? ''}</td>
-                    <td class="board-name">${record.board ?? '(舊紀錄，無板子資訊)'}</td>
-                    <td><strong>${record.vin ?? ''}</strong></td>
-                    <td>${record.function_name ?? ''}</td>
+                    <td>${escHtml(record.timestamp)}</td>
+                    <td class="board-name">${escHtml(record.board ?? '(舊紀錄，無板子資訊)')}</td>
+                    <td><strong>${escHtml(record.vin)}</strong></td>
+                    <td>${escHtml(record.function_name)}</td>
                     <td class="${statusClass}">${statusLabel}</td>
                     <td>${codeHtml}</td>
+                    <td><button class="danger" data-del-key="${record.key}">刪除</button></td>
                 </tr>`;
                 tableBody.innerHTML += row;
             });
+
+            tableBody.querySelectorAll('button[data-del-key]').forEach((btn) => {
+                btn.addEventListener('click', (e) => {
+                    const key = e.target.dataset.delKey;
+                    if (!confirm('確定要刪除這筆紀錄嗎？此動作無法復原。')) return;
+                    e.target.disabled = true;
+                    remove(ref(db, `Function_Logs/${key}`)).catch((err) => {
+                        alert('刪除失敗：' + err.message);
+                        e.target.disabled = false;
+                    });
+                    // 成功的話 onValue 監聽會自動收到更新、重繪整張表，不用自己動 DOM
+                });
+            });
         }
+
+        // ==========================================
+        // 匯出 CSV（含 UTF-8 BOM，避免 Excel 用 ANSI/Big5 打開變亂碼）
+        // ==========================================
+        function csvField(v) {
+            const s = String(v ?? '');
+            // 只要含逗號、換行、雙引號，就整段用雙引號包起來，裡面的雙引號變兩個雙引號跳脫
+            if (/[",\n\r]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+            return s;
+        }
+
+        document.getElementById('exportCsvBtn').addEventListener('click', () => {
+            const header = ['時間', '板子', '車身碼(VIN)', '功能', '結果', '狀態碼'];
+            const lines = [header.map(csvField).join(',')];
+
+            // CSV 照時間舊到新排（跟畫面新到舊相反，符合一般試算表由上往下遞增的閱讀習慣）
+            [...currentLogs].reverse().forEach((r) => {
+                const isSuccess = (r.status === "成功" || r.status_code === 1 || r.status_code === 6);
+                lines.push([
+                    r.timestamp ?? '',
+                    r.board ?? '',
+                    r.vin ?? '',
+                    r.function_name ?? '',
+                    isSuccess ? '成功' : '失敗',
+                    r.status_code ?? '',
+                ].map(csvField).join(','));
+            });
+
+            // 關鍵：開頭加 UTF-8 BOM (﻿)。沒有這個，Windows 版 Excel 會用系統
+            // 預設的 ANSI/Big5 開啟 CSV，中文全部變亂碼；加了 BOM，Excel 會正確認出 UTF-8。
+            const csvContent = '﻿' + lines.join('\r\n');
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+            a.href = url;
+            a.download = `Function_Logs_${stamp}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        });
     </script>
 </body>
 </html>
