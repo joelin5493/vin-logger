@@ -2,150 +2,262 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <title>車輛隱藏功能開通紀錄</title>
+    <title>PSA 隱藏功能管理</title>
     <style>
-        body { font-family: Arial, sans-serif; padding: 20px; background: #f4f4f4;}
+        body { font-family: Arial, sans-serif; padding: 20px; background: #f4f4f4; }
+        h2 { margin-top: 30px; }
         table { width: 100%; background: white; border-collapse: collapse; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
         th, td { padding: 12px; border: 1px solid #ddd; text-align: left; vertical-align: middle; }
         th { background: #343a40; color: white; }
         .status-success { color: #28a745; font-weight: bold; }
         .status-fail { color: #dc3545; font-weight: bold; }
-        /* 狀態碼高亮樣式 */
         .code-normal { color: #6c757d; font-size: 0.9em; }
-        .code-error { background: #dc3545; color: white; padding: 3px 8px; border-radius: 4px; font-weight: bold; font-family: monospace;}
-        
-        /* 新增：控制面板與開關的樣式 */
-        .control-panel {
-            background: white;
-            padding: 15px 20px;
-            margin-bottom: 20px;
-            border-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-            display: flex;
-            align-items: center;
-            gap: 15px;
+        .code-error { background: #dc3545; color: white; padding: 3px 8px; border-radius: 4px; font-weight: bold; font-family: monospace; }
+
+        .panel {
+            background: white; padding: 15px 20px; margin-bottom: 20px;
+            border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);
         }
-        .control-panel span.label-text { font-weight: bold; font-size: 1.1em; }
-        
-        /* Toggle Switch CSS */
-        .switch { position: relative; display: inline-block; width: 50px; height: 26px; }
+        .row-flex { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+
+        /* Toggle Switch */
+        .switch { position: relative; display: inline-block; width: 46px; height: 24px; }
         .switch input { opacity: 0; width: 0; height: 0; }
-        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 26px; }
-        .slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 4px; bottom: 4px; background-color: white; transition: .4s; border-radius: 50%; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .3s; border-radius: 24px; }
+        .slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 4px; bottom: 4px; background-color: white; transition: .3s; border-radius: 50%; }
         input:checked + .slider { background-color: #28a745; }
-        input:checked + .slider:before { transform: translateX(24px); }
-        input:disabled + .slider { opacity: 0.5; cursor: not-allowed; }
-        
-        #statusText { font-weight: bold; margin-left: 5px; }
+        input:checked + .slider:before { transform: translateX(22px); }
+        /* killed（整片停用）用紅色，語意跟其他開關相反：checked = 危險/停用中 */
+        .slider.danger { background-color: #6c757d; }
+        input:checked + .slider.danger { background-color: #dc3545; }
+
+        input[type="email"], input[type="password"], input[type="text"] {
+            padding: 8px 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px;
+        }
+        button {
+            padding: 8px 16px; border: none; border-radius: 4px; background: #343a40; color: white;
+            cursor: pointer; font-size: 14px;
+        }
+        button:hover { background: #495057; }
+        button.danger { background: #dc3545; }
+        button.danger:hover { background: #c82333; }
+        #loginError { color: #dc3545; margin-top: 8px; font-size: 13px; }
+        .board-name { font-weight: bold; font-family: monospace; }
+        .killed-badge { color: #dc3545; font-weight: bold; margin-left: 6px; }
     </style>
 </head>
 <body>
-    <h2>🛠️ 車輛隱藏功能開通/檢修紀錄</h2>
-    
-    <!-- 新增：連線權限控制面板 -->
-    <div class="control-panel">
-        <span class="label-text">App 連線權限控制：</span>
-        <label class="switch">
-            <input type="checkbox" id="appConnectToggle" disabled>
-            <span class="slider"></span>
-        </label>
-        <span id="statusText" style="color: #6c757d;">連線中...</span>
+
+    <!-- 登入畫面 -->
+    <div id="loginView" class="panel" style="max-width: 360px; margin: 60px auto;">
+        <h2 style="margin-top:0">🔒 管理員登入</h2>
+        <div style="display:flex; flex-direction:column; gap:10px;">
+            <input id="loginEmail" type="email" placeholder="Email" autocomplete="username">
+            <input id="loginPassword" type="password" placeholder="密碼" autocomplete="current-password">
+            <button id="loginBtn">登入</button>
+            <div id="loginError"></div>
+        </div>
     </div>
 
-    <table>
-        <thead>
-            <tr>
-                <th>時間</th>
-                <th>車身碼 (VIN)</th>
-                <th>開通功能</th>
-                <th>執行結果</th>
-                <th>狀態碼 (Debug)</th>
-            </tr>
-        </thead>
-        <tbody id="logTableBody">
-            <!-- 資料動態載入區 -->
-        </tbody>
-    </table>
+    <!-- 主控台 -->
+    <div id="mainView" style="display:none">
+        <div class="row-flex" style="justify-content: space-between;">
+            <h2 style="margin:0">🛠️ PSA 隱藏功能管理</h2>
+            <div>
+                <span id="whoami" style="margin-right:12px; color:#666; font-size:13px;"></span>
+                <button id="logoutBtn">登出</button>
+            </div>
+        </div>
+
+        <h2>板子權限</h2>
+        <div class="panel row-flex">
+            <input id="newBoardName" type="text" placeholder="新增板子名稱，例：PSA-CAN-BRIDGE-A1B2" style="flex:1; min-width:220px;">
+            <button id="addBoardBtn">新增板子</button>
+        </div>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>板子</th>
+                    <th>整片停用</th>
+                    <th>手動讀寫</th>
+                    <th>怠速啟停－開</th>
+                    <th>彎道輔助－開</th>
+                    <th>半自動停車－開<br><span style="font-weight:normal;font-size:11px;color:#aaa;">(功能未實作)</span></th>
+                </tr>
+            </thead>
+            <tbody id="boardsBody">
+                <tr><td colspan="6" style="text-align:center;color:#999;">載入中…</td></tr>
+            </tbody>
+        </table>
+
+        <h2>執行紀錄</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>時間</th>
+                    <th>板子</th>
+                    <th>車身碼 (VIN)</th>
+                    <th>功能</th>
+                    <th>結果</th>
+                    <th>狀態碼</th>
+                </tr>
+            </thead>
+            <tbody id="logTableBody"></tbody>
+        </table>
+    </div>
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-        // 新增引入 set 模組以供寫入使用
-        import { getDatabase, ref, onValue, set } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+        import {
+            getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged,
+        } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+        import {
+            getDatabase, ref, onValue, set,
+        } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 
         const firebaseConfig = {
-            databaseURL: "https://vin-logger-default-rtdb.asia-southeast1.firebasedatabase.app/" 
+            apiKey: "AIzaSyAkGSJH-Xu_jcxzDU6GhZSUoi02q4wnlSc",
+            databaseURL: "https://vin-logger-default-rtdb.asia-southeast1.firebasedatabase.app/",
         };
 
         const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
         const db = getDatabase(app);
 
-        // ==========================================
-        // 1. App 連線開關控制邏輯 (app_control/is_connect_enabled)
-        // ==========================================
-        const toggleRef = ref(db, 'app_control/is_connect_enabled');
-        const toggleBtn = document.getElementById('appConnectToggle');
-        const statusText = document.getElementById('statusText');
+        const loginView = document.getElementById('loginView');
+        const mainView = document.getElementById('mainView');
+        const loginError = document.getElementById('loginError');
+        const whoami = document.getElementById('whoami');
 
-        // 監聽 Firebase 狀態 (網頁載入或被其他設備修改時觸發)
-        onValue(toggleRef, (snapshot) => {
-            const isEnabled = snapshot.val() || false; // 若無資料預設為 false
-            toggleBtn.checked = isEnabled;
-            toggleBtn.disabled = false; // 讀取完畢，解除鎖定
-            statusText.innerText = isEnabled ? "✅ 已允許連線" : "❌ 已禁止連線";
-            statusText.style.color = isEnabled ? "#28a745" : "#dc3545";
+        let stopBoards = null;
+        let stopLogs = null;
+
+        // ==========================================
+        // 登入 / 登出
+        // ==========================================
+        document.getElementById('loginBtn').addEventListener('click', () => {
+            const email = document.getElementById('loginEmail').value.trim();
+            const pw = document.getElementById('loginPassword').value;
+            loginError.innerText = '';
+            signInWithEmailAndPassword(auth, email, pw).catch((err) => {
+                loginError.innerText = '登入失敗：' + err.message;
+            });
         });
 
-        // 當網頁上的開關被切換時，寫入 Firebase
-        toggleBtn.addEventListener('change', (e) => {
-            const newState = e.target.checked;
-            statusText.innerText = "⏳ 更新中...";
-            statusText.style.color = "#f39c12";
-            toggleBtn.disabled = true; // 暫時鎖定防止連點
-            
-            set(toggleRef, newState)
-                .then(() => {
-                    toggleBtn.disabled = false; // 寫入成功，解除鎖定
-                })
-                .catch((error) => {
-                    console.error("狀態更新失敗", error);
-                    alert("狀態更新失敗，請檢查資料庫寫入權限！");
-                    toggleBtn.checked = !newState; // 失敗時退回原狀態
-                    toggleBtn.disabled = false;
-                });
-        });
+        document.getElementById('logoutBtn').addEventListener('click', () => signOut(auth));
 
-
-        // ==========================================
-        // 2. 原本的 Log 紀錄讀取邏輯 (Function_Logs)
-        // ==========================================
-        const recordsRef = ref(db, 'Function_Logs');
-        onValue(recordsRef, (snapshot) => {
-            const data = snapshot.val();
-            const tableBody = document.getElementById('logTableBody');
-            tableBody.innerHTML = ''; 
-            
-            if(data) {
-                Object.values(data).reverse().forEach(record => {
-                    const isSuccess = (record.status === "成功" || record.status_code === 1);
-                    const statusClass = isSuccess ? "status-success" : "status-fail";
-                    const statusText = isSuccess ? "✅ 成功" : "❌ 失敗";
-
-                    const codeVal = record.status_code !== undefined ? record.status_code : "N/A";
-                    const codeHtml = isSuccess 
-                        ? `<span class="code-normal">${codeVal}</span>` 
-                        : `<span class="code-error" title="發生錯誤，代碼：${codeVal}">${codeVal}</span>`;
-
-                    const row = `<tr>
-                        <td>${record.timestamp}</td>
-                        <td><strong>${record.vin}</strong></td>
-                        <td>${record.function_name}</td>
-                        <td class="${statusClass}">${statusText}</td>
-                        <td>${codeHtml}</td>
-                    </tr>`;
-                    tableBody.innerHTML += row;
-                });
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                loginView.style.display = 'none';
+                mainView.style.display = 'block';
+                whoami.innerText = user.email || '';
+                startListening();
+            } else {
+                loginView.style.display = 'block';
+                mainView.style.display = 'none';
+                if (stopBoards) { stopBoards(); stopBoards = null; }
+                if (stopLogs) { stopLogs(); stopLogs = null; }
             }
         });
+
+        function startListening() {
+            stopBoards = onValue(ref(db, 'boards'), (snapshot) => {
+                renderBoards(snapshot.val() || {});
+            });
+            stopLogs = onValue(ref(db, 'Function_Logs'), (snapshot) => {
+                renderLogs(snapshot.val() || {});
+            });
+        }
+
+        // ==========================================
+        // 板子權限表格
+        // ==========================================
+        function switchHtml(path, checked, danger) {
+            return `<label class="switch">
+                <input type="checkbox" data-path="${path}" ${checked ? 'checked' : ''}>
+                <span class="slider${danger ? ' danger' : ''}"></span>
+            </label>`;
+        }
+
+        function renderBoards(data) {
+            const body = document.getElementById('boardsBody');
+            const names = Object.keys(data).sort();
+
+            if (names.length === 0) {
+                body.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#999;">還沒有登記任何板子</td></tr>';
+                return;
+            }
+
+            body.innerHTML = names.map((name) => {
+                const b = data[name] || {};
+                const feats = b.features || {};
+                const killed = !!b.killed;
+                return `<tr>
+                    <td><span class="board-name">${name}</span>${killed ? '<span class="killed-badge">🛑 已停用</span>' : ''}</td>
+                    <td>${switchHtml(`boards/${name}/killed`, killed, true)}</td>
+                    <td>${switchHtml(`boards/${name}/manualReadWrite`, !!b.manualReadWrite)}</td>
+                    <td>${switchHtml(`boards/${name}/features/startStop`, !!feats.startStop)}</td>
+                    <td>${switchHtml(`boards/${name}/features/corneringLight`, !!feats.corneringLight)}</td>
+                    <td>${switchHtml(`boards/${name}/features/semiAutoPark`, !!feats.semiAutoPark)}</td>
+                </tr>`;
+            }).join('');
+
+            body.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+                cb.addEventListener('change', (e) => {
+                    const path = e.target.dataset.path;
+                    const val = e.target.checked;
+                    e.target.disabled = true;
+                    set(ref(db, path), val)
+                        .catch((err) => {
+                            alert('更新失敗：' + err.message);
+                            e.target.checked = !val;
+                        })
+                        .finally(() => { e.target.disabled = false; });
+                });
+            });
+        }
+
+        document.getElementById('addBoardBtn').addEventListener('click', () => {
+            const input = document.getElementById('newBoardName');
+            const name = input.value.trim();
+            if (!name) return;
+            set(ref(db, `boards/${name}`), {
+                killed: false,
+                manualReadWrite: false,
+                features: { startStop: false, corneringLight: false, semiAutoPark: false },
+            }).then(() => { input.value = ''; })
+              .catch((err) => alert('新增失敗：' + err.message));
+        });
+
+        // ==========================================
+        // 執行紀錄
+        // ==========================================
+        function renderLogs(data) {
+            const tableBody = document.getElementById('logTableBody');
+            tableBody.innerHTML = '';
+
+            Object.values(data).reverse().forEach((record) => {
+                const isSuccess = (record.status === "成功" || record.status_code === 1 || record.status_code === 6);
+                const statusClass = isSuccess ? "status-success" : "status-fail";
+                const statusLabel = isSuccess ? "✅ 成功" : "❌ 失敗";
+
+                const codeVal = record.status_code !== undefined ? record.status_code : "N/A";
+                const codeHtml = isSuccess
+                    ? `<span class="code-normal">${codeVal}</span>`
+                    : `<span class="code-error" title="發生錯誤，代碼：${codeVal}">${codeVal}</span>`;
+
+                const row = `<tr>
+                    <td>${record.timestamp ?? ''}</td>
+                    <td class="board-name">${record.board ?? '(舊紀錄，無板子資訊)'}</td>
+                    <td><strong>${record.vin ?? ''}</strong></td>
+                    <td>${record.function_name ?? ''}</td>
+                    <td class="${statusClass}">${statusLabel}</td>
+                    <td>${codeHtml}</td>
+                </tr>`;
+                tableBody.innerHTML += row;
+            });
+        }
     </script>
 </body>
 </html>
