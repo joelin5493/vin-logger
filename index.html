@@ -41,9 +41,27 @@
         button:hover { background: #495057; }
         button.danger { background: #dc3545; }
         button.danger:hover { background: #c82333; }
+        select { padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; }
         #loginError { color: #dc3545; margin-top: 8px; font-size: 13px; }
         .board-name { font-weight: bold; font-family: monospace; }
         .killed-badge { color: #dc3545; font-weight: bold; margin-left: 6px; }
+
+        /* ECU Key 設定彈窗 —— 跟主表格分開放，未來半自動停車加更多顆 ECU 時
+           只會讓這個彈窗裡的清單變長，不會逼主表格一直往右長欄位。 */
+        .modal-overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.45);
+            display: flex; align-items: center; justify-content: center; z-index: 100;
+        }
+        .modal-box {
+            background: white; border-radius: 8px; padding: 20px 24px; width: 90%; max-width: 480px;
+            max-height: 80vh; overflow-y: auto; box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+        }
+        .key-slot-row { padding: 10px 0; border-bottom: 1px solid #eee; }
+        .key-slot-row:last-child { border-bottom: none; }
+        .key-slot-label { font-weight: bold; margin-bottom: 6px; }
+        .key-slot-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+        .key-slot-controls select, .key-slot-controls input[type="text"] { flex: 1; min-width: 120px; }
+        .key-slot-hint { font-size: 12px; color: #999; margin-top: 4px; }
     </style>
 </head>
 <body>
@@ -85,13 +103,25 @@
                     <th>彎道輔助－開</th>
                     <th>半自動停車－開<br><span style="font-weight:normal;font-size:11px;color:#aaa;">(功能未實作)</span></th>
                     <th>顯示 Log<br><span style="font-weight:normal;font-size:11px;color:#aaa;">關＝改用彈窗通知</span></th>
+                    <th>ECU Key</th>
                     <th></th>
                 </tr>
             </thead>
             <tbody id="boardsBody">
-                <tr><td colspan="8" style="text-align:center;color:#999;">載入中…</td></tr>
+                <tr><td colspan="9" style="text-align:center;color:#999;">載入中…</td></tr>
             </tbody>
         </table>
+
+        <!-- ECU Key 設定彈窗 -->
+        <div id="keyModalOverlay" class="modal-overlay" style="display:none">
+            <div class="modal-box">
+                <div class="row-flex" style="justify-content: space-between; margin-bottom: 10px;">
+                    <h3 style="margin:0">🔑 <span id="keyModalBoardName" class="board-name"></span> 的 ECU Key</h3>
+                    <button id="keyModalCloseBtn">關閉</button>
+                </div>
+                <div id="keyModalBody"></div>
+            </div>
+        </div>
 
         <div class="row-flex" style="justify-content: space-between; margin-top: 20px;">
             <h2 style="margin:0">執行紀錄</h2>
@@ -214,12 +244,151 @@
             </label>`;
         }
 
+        // ==========================================
+        // ECU Key（Seed/Key PIN）設定 —— per 板子、per ECU「插槽」。
+        //
+        // 集團車型/供應商不同，同一顆 ECU 解鎖用的 PIN 也不同；之後半自動停車會牽涉
+        // 更多顆 ECU，每加一顆新 ECU，就在這裡加一個新插槽（slot），不會動到資料結構、
+        // 也不會讓主表格多長一欄——都收在「🔑 ECU Key」這個彈窗裡，UI 空間不會爆炸。
+        //
+        // 這裡的 options 只是給下拉選單「已知常見值」方便選，不是白名單：選單一定有
+        // 「🖊 自行輸入…」，可以填任何值存進去。App 端完全不驗證這個值合不合法——
+        // PIN 錯的話算出來的 key 送給 ECU，ECU 自己會拒絕（NRC 0x35），不需要、
+        // 也不應該由這裡事先擋掉。這樣加新 ECU 時可以先在網頁上試填測試用的 PIN，
+        // 不用改 app 就能知道能不能解鎖。
+        // ==========================================
+        const CUSTOM_SENTINEL = '__custom__';
+        const ECU_SLOTS = [
+            {
+                id: 'bsi', label: 'BSI', defaultValue: 'B4E0',
+                options: [
+                    ['B4E0', 'EVO (B4E0)'],
+                    ['C318', 'Continental (C318)'],
+                    ['E4D8', 'Valeo (E4D8)'],
+                ],
+            },
+            {
+                id: 'rccNac', label: 'RCC / NAC', defaultValue: 'F107',
+                options: [
+                    ['F107', 'RCC (F107)'],
+                    ['D91C', 'NAC (D91C)'],
+                ],
+            },
+            // 半自動停車實作時，比照上面格式在這裡加新插槽即可，例如：
+            // { id: 'parkingEcu1', label: '半自動停車 ECU #1', defaultValue: '', options: [] },
+        ];
+
+        function keySlotRowHtml(boardName, slot, currentValue) {
+            const path = `boards/${boardName}/ecuKeys/${slot.id}`;
+            const isKnown = slot.options.some(([v]) => v === currentValue);
+            const selectValue = currentValue === undefined ? slot.defaultValue : currentValue;
+            const isCustom = selectValue !== undefined && !isKnown;
+
+            const opts = slot.options.map(([value, label]) =>
+                `<option value="${value}" ${!isCustom && value === selectValue ? 'selected' : ''}>${label}</option>`
+            ).join('');
+
+            return `<div class="key-slot-row" data-slot="${slot.id}">
+                <div class="key-slot-label">${slot.label}</div>
+                <div class="key-slot-controls">
+                    <select data-key-select data-path="${path}">
+                        ${opts}
+                        <option value="${CUSTOM_SENTINEL}" ${isCustom ? 'selected' : ''}>🖊 自行輸入…</option>
+                    </select>
+                    <input type="text" data-key-custom data-path="${path}"
+                        placeholder="輸入 hex PIN，例：B4E0"
+                        value="${isCustom ? escHtml(selectValue) : ''}"
+                        style="${isCustom ? '' : 'display:none'}">
+                    <button data-key-save style="${isCustom ? '' : 'display:none'}">儲存</button>
+                </div>
+                <div class="key-slot-hint">${currentValue === undefined ? `尚未設定，目前用預設值 ${slot.defaultValue}` : `目前值：${escHtml(currentValue)}`}</div>
+            </div>`;
+        }
+
+        // 除了上面固定登記的插槽，如果 Firebase 裡這片板子還有「其他」沒登記在
+        // ECU_SLOTS 的 ecuKeys（例如直接在 Firebase 主控台手動加的新 ECU、或未來
+        // 半自動停車先上線但這個網頁還沒同步改版），也照樣列出來，只是沒有下拉選單、
+        // 只能用文字輸入——不會讓沒登記的資料在畫面上消失或被悄悄蓋掉。
+        function extraKeySlotRowHtml(boardName, slotId, currentValue) {
+            const path = `boards/${boardName}/ecuKeys/${slotId}`;
+            return `<div class="key-slot-row" data-slot="${slotId}">
+                <div class="key-slot-label">${escHtml(slotId)} <span style="font-weight:normal;color:#aaa;font-size:11px;">(未登記插槽)</span></div>
+                <div class="key-slot-controls">
+                    <input type="text" data-key-custom data-path="${path}" value="${escHtml(currentValue)}">
+                    <button data-key-save>儲存</button>
+                </div>
+            </div>`;
+        }
+
+        function openKeyModal(boardName, ecuKeys) {
+            const known = new Set(ECU_SLOTS.map((s) => s.id));
+            const rows = ECU_SLOTS.map((slot) => keySlotRowHtml(boardName, slot, ecuKeys[slot.id]))
+                .concat(
+                    Object.keys(ecuKeys)
+                        .filter((id) => !known.has(id))
+                        .map((id) => extraKeySlotRowHtml(boardName, id, ecuKeys[id])),
+                )
+                .join('');
+
+            document.getElementById('keyModalBoardName').innerText = boardName;
+            const body = document.getElementById('keyModalBody');
+            body.innerHTML = rows;
+
+            body.querySelectorAll('select[data-key-select]').forEach((sel) => {
+                sel.addEventListener('change', (e) => {
+                    const row = e.target.closest('.key-slot-row');
+                    const customInput = row.querySelector('input[data-key-custom]');
+                    const saveBtn = row.querySelector('button[data-key-save]');
+                    if (e.target.value === CUSTOM_SENTINEL) {
+                        customInput.style.display = '';
+                        saveBtn.style.display = '';
+                        customInput.focus();
+                        return;
+                    }
+                    customInput.style.display = 'none';
+                    saveBtn.style.display = 'none';
+                    const path = e.target.dataset.path;
+                    e.target.disabled = true;
+                    set(ref(db, path), e.target.value)
+                        .catch((err) => alert('更新失敗：' + err.message))
+                        .finally(() => { e.target.disabled = false; });
+                });
+            });
+
+            function saveCustom(input) {
+                const val = input.value.trim();
+                if (!val) return alert('請輸入 PIN，不能留空');
+                const path = input.dataset.path;
+                input.disabled = true;
+                set(ref(db, path), val)
+                    .catch((err) => alert('更新失敗：' + err.message))
+                    .finally(() => { input.disabled = false; });
+            }
+
+            body.querySelectorAll('button[data-key-save]').forEach((btn) => {
+                btn.addEventListener('click', (e) => {
+                    saveCustom(e.target.closest('.key-slot-row').querySelector('input[data-key-custom]'));
+                });
+            });
+            body.querySelectorAll('input[data-key-custom]').forEach((input) => {
+                input.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') saveCustom(input);
+                });
+            });
+
+            document.getElementById('keyModalOverlay').style.display = 'flex';
+        }
+
+        document.getElementById('keyModalCloseBtn').addEventListener('click', () => {
+            document.getElementById('keyModalOverlay').style.display = 'none';
+        });
+
         function renderBoards(data) {
             const body = document.getElementById('boardsBody');
             const names = Object.keys(data).sort();
 
             if (names.length === 0) {
-                body.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#999;">還沒有登記任何板子</td></tr>';
+                body.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#999;">還沒有登記任何板子</td></tr>';
                 return;
             }
 
@@ -238,6 +407,7 @@
                     <td>${switchHtml(`boards/${name}/features/corneringLight`, !!feats.corneringLight)}</td>
                     <td>${switchHtml(`boards/${name}/features/semiAutoPark`, !!feats.semiAutoPark)}</td>
                     <td>${switchHtml(`boards/${name}/showLog`, showLog)}</td>
+                    <td><button data-open-key="${name}">🔑 ECU Key</button></td>
                     <td><button class="danger" data-del-board="${name}">刪除板子</button></td>
                 </tr>`;
             }).join('');
@@ -253,6 +423,14 @@
                             e.target.checked = !val;
                         })
                         .finally(() => { e.target.disabled = false; });
+                });
+            });
+
+            body.querySelectorAll('button[data-open-key]').forEach((btn) => {
+                btn.addEventListener('click', (e) => {
+                    const name = e.target.dataset.openKey;
+                    const ecuKeys = (data[name] && data[name].ecuKeys) || {};
+                    openKeyModal(name, ecuKeys);
                 });
             });
 
@@ -278,6 +456,8 @@
                 manualReadWrite: false,
                 features: { startStop: false, corneringLight: false, semiAutoPark: false },
                 showLog: true,
+                // ecuKeys 不主動設定——留空時 app 端每個插槽都會退回內建預設值
+                // （BSI=B4E0、RCC/NAC=F107），要換供應商/主機型號再用「🔑 ECU Key」設定。
             }).then(() => { input.value = ''; })
               .catch((err) => alert('新增失敗：' + err.message));
         });
