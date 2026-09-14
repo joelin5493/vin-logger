@@ -84,11 +84,12 @@
                     <th>怠速啟停－開</th>
                     <th>彎道輔助－開</th>
                     <th>半自動停車－開<br><span style="font-weight:normal;font-size:11px;color:#aaa;">(功能未實作)</span></th>
+                    <th>顯示 Log<br><span style="font-weight:normal;font-size:11px;color:#aaa;">關＝改用彈窗通知</span></th>
                     <th></th>
                 </tr>
             </thead>
             <tbody id="boardsBody">
-                <tr><td colspan="7" style="text-align:center;color:#999;">載入中…</td></tr>
+                <tr><td colspan="8" style="text-align:center;color:#999;">載入中…</td></tr>
             </tbody>
         </table>
 
@@ -152,17 +153,45 @@
 
         document.getElementById('logoutBtn').addEventListener('click', () => signOut(auth));
 
+        // ==========================================
+        // 閒置 30 分鐘自動登出：任何滑鼠/鍵盤/觸控/捲動操作都會重新計時，
+        // 真的放著不管超過 30 分鐘才會登出，不是登入後準時 30 分鐘就踢人。
+        // ==========================================
+        const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+        const IDLE_EVENTS = ['click', 'mousemove', 'keydown', 'touchstart', 'scroll'];
+        let idleTimer = null;
+
+        function resetIdleTimer() {
+            if (idleTimer) clearTimeout(idleTimer);
+            idleTimer = setTimeout(() => {
+                signOut(auth);
+                alert('閒置超過 30 分鐘，已自動登出。');
+            }, IDLE_TIMEOUT_MS);
+        }
+
+        function startIdleWatch() {
+            resetIdleTimer();
+            IDLE_EVENTS.forEach((evt) => document.addEventListener(evt, resetIdleTimer));
+        }
+
+        function stopIdleWatch() {
+            if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+            IDLE_EVENTS.forEach((evt) => document.removeEventListener(evt, resetIdleTimer));
+        }
+
         onAuthStateChanged(auth, (user) => {
             if (user) {
                 loginView.style.display = 'none';
                 mainView.style.display = 'block';
                 whoami.innerText = user.email || '';
                 startListening();
+                startIdleWatch();
             } else {
                 loginView.style.display = 'block';
                 mainView.style.display = 'none';
                 if (stopBoards) { stopBoards(); stopBoards = null; }
                 if (stopLogs) { stopLogs(); stopLogs = null; }
+                stopIdleWatch();
             }
         });
 
@@ -190,7 +219,7 @@
             const names = Object.keys(data).sort();
 
             if (names.length === 0) {
-                body.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#999;">還沒有登記任何板子</td></tr>';
+                body.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#999;">還沒有登記任何板子</td></tr>';
                 return;
             }
 
@@ -198,6 +227,9 @@
                 const b = data[name] || {};
                 const feats = b.features || {};
                 const killed = !!b.killed;
+                // 欄位不存在（舊資料，還沒手動設定過）當作 true（顯示 log），跟 App 端邏輯一致，
+                // 避免既有板子的行為被悄悄改變成彈窗模式。
+                const showLog = b.showLog === undefined ? true : !!b.showLog;
                 return `<tr>
                     <td><span class="board-name">${name}</span>${killed ? '<span class="killed-badge">🛑 已停用</span>' : ''}</td>
                     <td>${switchHtml(`boards/${name}/killed`, killed, true)}</td>
@@ -205,6 +237,7 @@
                     <td>${switchHtml(`boards/${name}/features/startStop`, !!feats.startStop)}</td>
                     <td>${switchHtml(`boards/${name}/features/corneringLight`, !!feats.corneringLight)}</td>
                     <td>${switchHtml(`boards/${name}/features/semiAutoPark`, !!feats.semiAutoPark)}</td>
+                    <td>${switchHtml(`boards/${name}/showLog`, showLog)}</td>
                     <td><button class="danger" data-del-board="${name}">刪除板子</button></td>
                 </tr>`;
             }).join('');
@@ -244,6 +277,7 @@
                 killed: false,
                 manualReadWrite: false,
                 features: { startStop: false, corneringLight: false, semiAutoPark: false },
+                showLog: true,
             }).then(() => { input.value = ''; })
               .catch((err) => alert('新增失敗：' + err.message));
         });
