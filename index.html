@@ -101,7 +101,7 @@
                     <th>手動讀寫</th>
                     <th>怠速啟停－開</th>
                     <th>彎道輔助－開</th>
-                    <th>半自動停車－開<br><span style="font-weight:normal;font-size:11px;color:#aaa;">(功能未實作)</span></th>
+                    <th>半自動停車－開</th>
                     <th>顯示 Log<br><span style="font-weight:normal;font-size:11px;color:#aaa;">關＝改用彈窗通知</span></th>
                     <th>ECU Key</th>
                     <th></th>
@@ -141,6 +141,33 @@
             </thead>
             <tbody id="logTableBody"></tbody>
         </table>
+
+        <h2>ECU 備份（寫入前原始值）</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>時間</th>
+                    <th>車身碼 (VIN)</th>
+                    <th>板子</th>
+                    <th>功能</th>
+                    <th>方向</th>
+                    <th>步驟數</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody id="backupTableBody"></tbody>
+        </table>
+
+        <!-- 備份內容詳情彈窗 -->
+        <div id="backupModalOverlay" class="modal-overlay" style="display:none">
+            <div class="modal-box">
+                <div class="row-flex" style="justify-content: space-between; margin-bottom: 10px;">
+                    <h3 style="margin:0">💾 備份內容</h3>
+                    <button id="backupModalCloseBtn">關閉</button>
+                </div>
+                <div id="backupModalBody"></div>
+            </div>
+        </div>
     </div>
 
     <script type="module">
@@ -151,6 +178,9 @@
         import {
             getDatabase, ref, onValue, set, remove,
         } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+        import {
+            initializeAppCheck, ReCaptchaV3Provider,
+        } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app-check.js";
 
         const firebaseConfig = {
             apiKey: "AIzaSyAkGSJH-Xu_jcxzDU6GhZSUoi02q4wnlSc",
@@ -161,6 +191,19 @@
         const auth = getAuth(app);
         const db = getDatabase(app);
 
+        // App Check：證明打 API 的真的是這個網頁，不是有人拿 API Key 自己組 REST 請求。
+        // RECAPTCHA_SITE_KEY 要到 Firebase 主控台「App Check → Apps → 註冊這個 Web
+        // App → reCAPTCHA v3」拿，拿到前這裡先跳過初始化（不影響現有功能，只是還沒
+        // 多這層防護）。這一步做完、且 iOS App 那邊的 DeviceCheck 也接完之後，才能去
+        // Firebase 主控台把 Realtime Database 的「Enforce App Check」打開。
+        const RECAPTCHA_SITE_KEY = 'TODO_FILL_IN_AFTER_REGISTERING_RECAPTCHA_V3_IN_APP_CHECK_CONSOLE';
+        if (!RECAPTCHA_SITE_KEY.startsWith('TODO_')) {
+            initializeAppCheck(app, {
+                provider: new ReCaptchaV3Provider(RECAPTCHA_SITE_KEY),
+                isTokenAutoRefreshEnabled: true,
+            });
+        }
+
         const loginView = document.getElementById('loginView');
         const mainView = document.getElementById('mainView');
         const loginError = document.getElementById('loginError');
@@ -168,6 +211,7 @@
 
         let stopBoards = null;
         let stopLogs = null;
+        let stopBackups = null;
 
         // ==========================================
         // 登入 / 登出
@@ -221,6 +265,7 @@
                 mainView.style.display = 'none';
                 if (stopBoards) { stopBoards(); stopBoards = null; }
                 if (stopLogs) { stopLogs(); stopLogs = null; }
+                if (stopBackups) { stopBackups(); stopBackups = null; }
                 stopIdleWatch();
             }
         });
@@ -231,6 +276,9 @@
             });
             stopLogs = onValue(ref(db, 'Function_Logs'), (snapshot) => {
                 renderLogs(snapshot.val() || {});
+            });
+            stopBackups = onValue(ref(db, 'ECU_Backups'), (snapshot) => {
+                renderBackups(snapshot.val() || {});
             });
         }
 
@@ -274,8 +322,38 @@
                     ['D91C', 'NAC (D91C)'],
                 ],
             },
-            // 半自動停車實作時，比照上面格式在這裡加新插槽即可，例如：
-            // { id: 'parkingEcu1', label: '半自動停車 ECU #1', defaultValue: '', options: [] },
+            // 半自動停車（2026-10-23 加入）用到的三顆新 ECU：
+            {
+                id: 'dae', label: 'DAE（方向盤 EPS）', defaultValue: '2105',
+                options: [
+                    ['2105', 'key1 (2105)'],
+                    ['2707', 'key2 (2707)'],
+                ],
+            },
+            {
+                id: 'aas', label: 'AAS（停車感測器）', defaultValue: 'D1F5',
+                options: [
+                    ['D1F5', 'key 1 (D1F5)'],
+                    ['B6F0', 'key 2 (B6F0)'],
+                ],
+            },
+            {
+                id: 'esp', label: 'ESP', defaultValue: 'ABFB',
+                options: [
+                    ['ABFB', 'System 90/92/93 (ABFB)'],
+                    ['226E', 'System 90/92/93_v2 (226E)'],
+                    ['BC93', 'System 93 (BC93)'],
+                    ['60A5', 'key1 (60A5)'],
+                    ['2305', 'key3 (2305)'],
+                ],
+            },
+            {
+                id: 'cirocco', label: 'CIROCCO（儀表顯示）', defaultValue: 'FAFA',
+                options: [
+                    ['FAFA', 'CIROCCO (FAFA)'],
+                ],
+            },
+            // 之後再加新 ECU，比照上面格式在這裡加新插槽即可。
         ];
 
         function keySlotRowHtml(boardName, slot, currentValue) {
@@ -559,6 +637,80 @@
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
+        });
+
+        // ==========================================
+        // ECU 備份（app 每次執行功能時，寫入前讀到的原始值——次要雲端副本，
+        // app 本機「檔案」App 裡那份才是第一順位）
+        // ==========================================
+        let currentBackups = []; // [{ key, ...record }]，新到舊排序
+
+        function renderBackups(data) {
+            currentBackups = Object.entries(data)
+                .map(([key, record]) => ({ key, ...record }))
+                .reverse();
+
+            const tableBody = document.getElementById('backupTableBody');
+            if (currentBackups.length === 0) {
+                tableBody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#999;">還沒有備份紀錄</td></tr>';
+                return;
+            }
+
+            tableBody.innerHTML = currentBackups.map((record) => `<tr>
+                <td>${escHtml(record.timestamp)}</td>
+                <td><strong>${escHtml(record.vin)}</strong></td>
+                <td class="board-name">${escHtml(record.board)}</td>
+                <td>${escHtml(record.feature)}</td>
+                <td>${escHtml(record.direction)}</td>
+                <td>${(record.steps || []).length}</td>
+                <td>
+                    <button data-view-backup="${record.key}">查看內容</button>
+                    <button class="danger" data-del-backup="${record.key}">刪除</button>
+                </td>
+            </tr>`).join('');
+
+            tableBody.querySelectorAll('button[data-view-backup]').forEach((btn) => {
+                btn.addEventListener('click', (e) => {
+                    const key = e.target.dataset.viewBackup;
+                    const record = currentBackups.find((r) => r.key === key);
+                    if (record) openBackupModal(record);
+                });
+            });
+
+            tableBody.querySelectorAll('button[data-del-backup]').forEach((btn) => {
+                btn.addEventListener('click', (e) => {
+                    const key = e.target.dataset.delBackup;
+                    if (!confirm('確定要刪除這筆備份紀錄嗎？此動作無法復原（本機手機上的檔案不受影響）。')) return;
+                    e.target.disabled = true;
+                    remove(ref(db, `ECU_Backups/${key}`)).catch((err) => {
+                        alert('刪除失敗：' + err.message);
+                        e.target.disabled = false;
+                    });
+                });
+            });
+        }
+
+        function openBackupModal(record) {
+            const rows = (record.steps || []).map((s) => `<div class="key-slot-row">
+                <div class="key-slot-label">${escHtml(s.label)}</div>
+                <div class="key-slot-hint">TX ${escHtml(s.txId)} / RX ${escHtml(s.rxId)} · zone ${escHtml(s.zone)}</div>
+                <div class="key-slot-hint">原始值：<code>${escHtml(s.originalHex ?? '(無)')}</code></div>
+            </div>`).join('');
+
+            document.getElementById('backupModalBody').innerHTML = `
+                <div class="key-slot-row">
+                    <div class="key-slot-hint">時間：${escHtml(record.timestamp)}</div>
+                    <div class="key-slot-hint">車身碼：${escHtml(record.vin)}</div>
+                    <div class="key-slot-hint">板子：${escHtml(record.board)}</div>
+                    <div class="key-slot-hint">功能：${escHtml(record.feature)}（${escHtml(record.direction)}）</div>
+                </div>
+                ${rows}
+            `;
+            document.getElementById('backupModalOverlay').style.display = 'flex';
+        }
+
+        document.getElementById('backupModalCloseBtn').addEventListener('click', () => {
+            document.getElementById('backupModalOverlay').style.display = 'none';
         });
     </script>
 </body>
